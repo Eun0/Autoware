@@ -22,46 +22,6 @@ PlannerH::~PlannerH()
 {
 }
 
-void PlannerH::GenerateRunoffTrajectoryIrregular(const std::vector<std::vector<WayPoint> >& referencePaths,const WayPoint& carPos, const bool& bEnableLaneChange, const double& speed, const double& microPlanDistance,
-    const double& maxSpeed,const double& minSpeed, const double&  carTipMargin, const double& rollInMargin,
-    const double& rollInSpeedFactor, const double& pathDensity, const double& rollOutDensity,
-    const int& rollOutNumber, const double& SmoothDataWeight, const double& SmoothWeight,
-    const double& SmoothTolerance, const double& speedProfileFactor, const bool& bHeadingSmooth,
-    const int& iCurrGlobalPath, const int& iCurrLocalTraj,
-    std::vector<std::vector<std::vector<WayPoint> > >& rollOutsPaths,
-    std::vector<WayPoint>& sampledPoints_debug)
-{
-
-  if(referencePaths.size()==0) return;
-  if(microPlanDistance <=0 ) return;
-  rollOutsPaths.clear();
-
-  sampledPoints_debug.clear(); //for visualization only
-
-  for(unsigned int i = 0; i < referencePaths.size(); i++)
-  {
-    std::vector<std::vector<WayPoint> > local_rollOutPaths;
-    int s_index = 0, e_index = 0;
-    vector<double> e_distances;
-    if(referencePaths.at(i).size()>0)
-    {
-      PlanningHelpers::CalculateRollInTrajectoriesIrregular(carPos, speed, referencePaths.at(i), s_index, e_index, e_distances,
-          local_rollOutPaths, microPlanDistance, maxSpeed, carTipMargin, rollInMargin,
-          rollInSpeedFactor, pathDensity, rollOutDensity,rollOutNumber,
-          SmoothDataWeight, SmoothWeight, SmoothTolerance, bHeadingSmooth, sampledPoints_debug);
-    }
-    else
-    {
-      for(int j=0; j< rollOutNumber+1; j++)
-      {
-        local_rollOutPaths.push_back(vector<WayPoint>());
-      }
-    }
-
-    rollOutsPaths.push_back(local_rollOutPaths);
-  }
-}
-
 void PlannerH::GenerateRunoffTrajectory(const std::vector<std::vector<WayPoint> >& referencePaths,const WayPoint& carPos, const bool& bEnableLaneChange, const double& speed, const double& microPlanDistance,
     const double& maxSpeed,const double& minSpeed, const double&  carTipMargin, const double& rollInMargin,
     const double& rollInSpeedFactor, const double& pathDensity, const double& rollOutDensity,
@@ -528,5 +488,121 @@ void PlannerH::DeleteWaypoints(vector<WayPoint*>& wps)
   }
   wps.clear();
 }
+
+//eun
+
+void PlannerH::GenerateRunoffTrajectoryV2(const std::vector<std::vector<WayPoint> >& referencePaths,const WayPoint& carPos, const bool& bEnableLaneChange, const double& speed, const double& microPlanDistance,
+    const double& maxSpeed,const double& minSpeed, const double&  carTipMargin, const double& rollInMargin,
+    const double& rollInSpeedFactor, const double& pathDensity, const double& rollOutDensity,
+    const int& rollOutNumber, const double& SmoothDataWeight, const double& SmoothWeight,
+    const double& SmoothTolerance, const double& speedProfileFactor, const bool& bHeadingSmooth,
+    const int& iCurrGlobalPath, const int& iCurrLocalTraj,
+    std::vector<std::vector<std::vector<WayPoint> > >& rollOutsPaths,
+    std::vector<WayPoint>& sampledPoints_debug, 
+    RoadNetwork& map)
+{
+  if(referencePaths.size()==0) return;
+  if(microPlanDistance <=0 ) return;
+  rollOutsPaths.clear();
+
+  sampledPoints_debug.clear(); //for visualization only
+
+  PlannerHNS::WayPoint* pCurrentPoint = PlannerHNS::MappingHelpers::GetClosestWaypointFromMap(carPos, map);
+ 
+  
+  int ri = -1;
+  int li = -1;
+  int ci = -1;
+
+  bool r_found=false;
+  bool l_found=false;
+  bool c_found=false;
+
+  int currentRightLnId=pCurrentPoint->RightLnId;
+  int currentLeftLnId=pCurrentPoint->LeftLnId;
+  int currentLnId=pCurrentPoint->laneId;
+  if(currentRightLnId==0)
+    r_found=true;
+  if(currentLeftLnId==0)
+    l_found=true;
+  for(unsigned int i=0;i<referencePaths.size() && (!r_found||!l_found||!c_found);i++)
+  {
+    for(unsigned int j=0; j<referencePaths.at(i).size();j++)
+    { 
+      if(!c_found && referencePaths.at(i).at(j).laneId==currentLnId)
+      {
+        ci=i;
+        c_found=true;
+        break;
+      }
+      if(!r_found && referencePaths.at(i).at(j).laneId==currentRightLnId)
+      {
+        ri=i;
+        r_found=true;
+        break;
+      }
+      if(!l_found && referencePaths.at(i).at(j).laneId==currentLeftLnId)
+      {
+        li=i;
+        l_found=true;
+        break;
+      }
+
+    }
+  }
+  
+  std::vector<int> vec = {li, ci, ri};
+
+  for(unsigned int i = 0; i < 3; i++)
+  { 
+    if(vec[i]==-1)
+      continue;
+    std::vector<std::vector<WayPoint> > local_rollOutPaths;
+    int s_index = 0, e_index = 0;
+    vector<double> e_distances;
+    if(referencePaths.at(vec[i]).size()>0)
+    {
+      PlanningHelpers::CalculateRollInTrajectories(carPos, speed, referencePaths.at(vec[i]), s_index, e_index, e_distances,
+          local_rollOutPaths, microPlanDistance, maxSpeed, carTipMargin, rollInMargin,
+          rollInSpeedFactor, pathDensity, rollOutDensity,rollOutNumber,
+          SmoothDataWeight, SmoothWeight, SmoothTolerance, bHeadingSmooth, sampledPoints_debug);
+    }
+    else
+    {
+      for(int j=0; j< rollOutNumber+1; j++)
+      {
+        local_rollOutPaths.push_back(vector<WayPoint>());
+      }
+    }
+
+    rollOutsPaths.push_back(local_rollOutPaths);
+  }
+}
+
+void PlannerH::FindLaneNum(const WayPoint& currentPos, RoadNetwork& map, int& current_lane, int& total_lane) 
+{
+  WayPoint* pCurrentPoint = PlannerHNS::MappingHelpers::GetClosestWaypointFromMap(currentPos, map);
+  
+  int leftNumber=0, rightNumber=0;
+  WayPoint* tmp_left = pCurrentPoint;
+  WayPoint* tmp_right = pCurrentPoint;
+
+  while(tmp_left->pLeft) {
+    tmp_left = tmp_left->pLeft;
+    leftNumber+=1;
+  }
+
+  while(tmp_right->pRight) {
+    tmp_right = tmp_right->pRight;
+    rightNumber+=1;
+  }
+
+  total_lane = leftNumber+rightNumber+1;
+  current_lane = leftNumber+1;
+  
+}
+
+
+
 
 }

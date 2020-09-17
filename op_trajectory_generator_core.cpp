@@ -31,6 +31,20 @@ TrajectoryGen::TrajectoryGen()
   ros::NodeHandle _nh;
   UpdatePlanningParams(_nh);
 
+  //eun
+  bMap = false;
+  nh.getParam("/op_global_planner/mapFileName" , m_MapPath);
+
+  int iSource = 0;
+  nh.getParam("/op_global_planner/mapSource" , iSource);
+  if(iSource == 0)
+    m_MapType = PlannerHNS::MAP_AUTOWARE;
+  else if (iSource == 1)
+    m_MapType = PlannerHNS::MAP_FOLDER;
+  else if(iSource == 2)
+    m_MapType = PlannerHNS::MAP_KML_FILE;
+  //eun end
+
   tf::StampedTransform transform;
   PlannerHNS::ROSHelpers::GetTransformFromTF("map", "world", transform);
   m_OriginPos.position.x  = transform.getOrigin().x();
@@ -55,8 +69,22 @@ TrajectoryGen::TrajectoryGen()
   sub_GlobalPlannerPaths = nh.subscribe("/lane_waypoints_array", 1, &TrajectoryGen::callbackGetGlobalPlannerPath, this);
 
   //eun
-  pub_LocalTrajectoriesBorders = nh.advertise<autoware_msgs::LaneArray>("local_trajectories_borders", 1);
-  pub_LocalTrajectoriesBordersRviz = nh.advertise<visualization_msgs::MarkerArray>("local_trajectories_borders_rviz", 1);
+  pub_lane_info = nh.advertise<autoware_msgs::LaneInfo>("lane_info", 1);
+  sub_lanes = nh.subscribe("/vector_map_info/lane", 1, &TrajectoryGen::callbackGetVMLanes,  this);
+  sub_points = nh.subscribe("/vector_map_info/point", 1, &TrajectoryGen::callbackGetVMPoints,  this);
+  sub_dt_lanes = nh.subscribe("/vector_map_info/dtlane", 1, &TrajectoryGen::callbackGetVMdtLanes,  this);
+  sub_intersect = nh.subscribe("/vector_map_info/cross_road", 1, &TrajectoryGen::callbackGetVMIntersections,  this);
+  sup_area = nh.subscribe("/vector_map_info/area", 1, &TrajectoryGen::callbackGetVMAreas,  this);
+  sub_lines = nh.subscribe("/vector_map_info/line", 1, &TrajectoryGen::callbackGetVMLines,  this);
+  sub_stop_line = nh.subscribe("/vector_map_info/stop_line", 1, &TrajectoryGen::callbackGetVMStopLines,  this);
+  sub_signals = nh.subscribe("/vector_map_info/signal", 1, &TrajectoryGen::callbackGetVMSignal,  this);
+  sub_vectors = nh.subscribe("/vector_map_info/vector", 1, &TrajectoryGen::callbackGetVMVectors,  this);
+  sub_curbs = nh.subscribe("/vector_map_info/curb", 1, &TrajectoryGen::callbackGetVMCurbs,  this);
+  sub_edges = nh.subscribe("/vector_map_info/road_edge", 1, &TrajectoryGen::callbackGetVMRoadEdges,  this);
+  sub_way_areas = nh.subscribe("/vector_map_info/way_area", 1, &TrajectoryGen::callbackGetVMWayAreas,  this);
+  sub_cross_walk = nh.subscribe("/vector_map_info/cross_walk", 1, &TrajectoryGen::callbackGetVMCrossWalks,  this);
+  sub_nodes = nh.subscribe("/vector_map_info/node", 1, &TrajectoryGen::callbackGetVMNodes,  this);
+
 }
 
 TrajectoryGen::~TrajectoryGen()
@@ -117,6 +145,192 @@ void TrajectoryGen::UpdatePlanningParams(ros::NodeHandle& _nh)
 
 }
 
+//eun
+void TrajectoryGen::callbackGetCurrentPose(const geometry_msgs::PoseStampedConstPtr& msg)
+{
+  m_CurrentPos = PlannerHNS::WayPoint(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z, tf::getYaw(msg->pose.orientation));
+  PlannerHNS::WayPoint* p = PlannerHNS::MappingHelpers::GetClosestWaypointFromMap(m_CurrentPos,m_Map);
+  m_InitPos = m_CurrentPos;
+  bNewCurrentPos = true;
+  bInitPos = true;
+}
+
+void TrajectoryGen::callbackGetGlobalPlannerPath(const autoware_msgs::LaneArrayConstPtr& msg)
+{
+  if(msg->lanes.size() > 0 && bMap)
+  {
+
+    bool bOldGlobalPath = m_GlobalPaths.size() == msg->lanes.size();
+
+    m_GlobalPaths.clear();
+
+    for(unsigned int i = 0 ; i < msg->lanes.size(); i++)
+    {
+      PlannerHNS::ROSHelpers::ConvertFromAutowareLaneToLocalLane(msg->lanes.at(i), m_temp_path);
+      PlannerHNS::Lane* pPrevValid = 0;
+      for(unsigned int j = 0 ; j < m_temp_path.size(); j++)
+      {
+        PlannerHNS::Lane* pLane = 0;
+        pLane = PlannerHNS::MappingHelpers::GetLaneById(m_temp_path.at(j).laneId, m_Map);
+        if(!pLane)
+        {
+          pLane = PlannerHNS::MappingHelpers::GetClosestLaneFromMapDirectionBased(m_temp_path.at(j), m_Map, 1);
+
+          if(!pLane && !pPrevValid)
+          {
+            ROS_ERROR("Map inconsistency between Global Path and Local Planer Map, Can't identify current lane.");
+            return;
+          }
+
+          if(!pLane)
+            m_temp_path.at(j).pLane = pPrevValid;
+          else
+          {
+            m_temp_path.at(j).pLane = pLane;
+            pPrevValid = pLane ;
+          }
+
+          m_temp_path.at(j).laneId = m_temp_path.at(j).pLane->id;
+        }
+        else
+          m_temp_path.at(j).pLane = pLane;
+
+
+        //std::cout << "StopLineInGlobalPath: " << m_temp_path.at(j).stopLineID << std::endl;
+      }
+
+      PlannerHNS::PlanningHelpers::CalcAngleAndCost(m_temp_path);
+      m_GlobalPaths.push_back(m_temp_path);
+
+      if(bOldGlobalPath)
+      {
+        bOldGlobalPath = PlannerHNS::PlanningHelpers::CompareTrajectories(m_temp_path, m_GlobalPaths.at(i));
+      }
+    }
+
+    if(!bOldGlobalPath)
+    {
+      bWayGlobalPath = true;
+      bWayGlobalPathLogs = true;
+      for(unsigned int i = 0; i < m_GlobalPaths.size(); i++)
+      {
+        PlannerHNS::PlanningHelpers::FixPathDensity(m_GlobalPaths.at(i), m_PlanningParams.pathDensity);
+        PlannerHNS::PlanningHelpers::SmoothPath(m_GlobalPaths.at(i), 0.35, 0.4, 0.05);
+
+        PlannerHNS::PlanningHelpers::GenerateRecommendedSpeed(m_GlobalPaths.at(i), m_CarInfo.max_speed_forward, m_PlanningParams.speedProfileFactor);
+        m_GlobalPaths.at(i).at(m_GlobalPaths.at(i).size()-1).v = 0;
+      }
+
+      std::cout << "Received New Global Path Selector! " << std::endl;
+    }
+    else
+    {
+      m_GlobalPaths.clear();
+    }
+  }
+}
+
+void TrajectoryGen::callbackGetVMLanes(const vector_map_msgs::LaneArray& msg)
+{
+  std::cout << "Received Lanes" << msg.data.size() << endl;
+  if(m_MapRaw.pLanes == nullptr)
+  { 
+    m_MapRaw.pLanes = new UtilityHNS::AisanLanesFileReader(msg);
+  }
+}
+
+void TrajectoryGen::callbackGetVMPoints(const vector_map_msgs::PointArray& msg)
+{
+  std::cout << "Received Points" << msg.data.size() << endl;
+  if(m_MapRaw.pPoints  == nullptr)
+    m_MapRaw.pPoints = new UtilityHNS::AisanPointsFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMdtLanes(const vector_map_msgs::DTLaneArray& msg)
+{
+  std::cout << "Received dtLanes" << msg.data.size() << endl;
+  if(m_MapRaw.pCenterLines == nullptr)
+    m_MapRaw.pCenterLines = new UtilityHNS::AisanCenterLinesFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMIntersections(const vector_map_msgs::CrossRoadArray& msg)
+{
+  std::cout << "Received CrossRoads" << msg.data.size() << endl;
+  if(m_MapRaw.pIntersections == nullptr)
+    m_MapRaw.pIntersections = new UtilityHNS::AisanIntersectionFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMAreas(const vector_map_msgs::AreaArray& msg)
+{
+  std::cout << "Received Areas" << msg.data.size() << endl;
+  if(m_MapRaw.pAreas == nullptr)
+    m_MapRaw.pAreas = new UtilityHNS::AisanAreasFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMLines(const vector_map_msgs::LineArray& msg)
+{
+  std::cout << "Received Lines" << msg.data.size() << endl;
+  if(m_MapRaw.pLines == nullptr)
+    m_MapRaw.pLines = new UtilityHNS::AisanLinesFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMStopLines(const vector_map_msgs::StopLineArray& msg)
+{
+  std::cout << "Received StopLines" << msg.data.size() << endl;
+  if(m_MapRaw.pStopLines == nullptr)
+    m_MapRaw.pStopLines = new UtilityHNS::AisanStopLineFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMSignal(const vector_map_msgs::SignalArray& msg)
+{
+  std::cout << "Received Signals" << msg.data.size() << endl;
+  if(m_MapRaw.pSignals  == nullptr)
+    m_MapRaw.pSignals = new UtilityHNS::AisanSignalFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMVectors(const vector_map_msgs::VectorArray& msg)
+{
+  std::cout << "Received Vectors" << msg.data.size() << endl;
+  if(m_MapRaw.pVectors  == nullptr)
+    m_MapRaw.pVectors = new UtilityHNS::AisanVectorFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMCurbs(const vector_map_msgs::CurbArray& msg)
+{
+  std::cout << "Received Curbs" << msg.data.size() << endl;
+  if(m_MapRaw.pCurbs == nullptr)
+    m_MapRaw.pCurbs = new UtilityHNS::AisanCurbFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMRoadEdges(const vector_map_msgs::RoadEdgeArray& msg)
+{
+  std::cout << "Received Edges" << msg.data.size() << endl;
+  if(m_MapRaw.pRoadedges  == nullptr)
+    m_MapRaw.pRoadedges = new UtilityHNS::AisanRoadEdgeFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMWayAreas(const vector_map_msgs::WayAreaArray& msg)
+{
+  std::cout << "Received Wayareas" << msg.data.size() << endl;
+  if(m_MapRaw.pWayAreas  == nullptr)
+    m_MapRaw.pWayAreas = new UtilityHNS::AisanWayareaFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMCrossWalks(const vector_map_msgs::CrossWalkArray& msg)
+{
+  std::cout << "Received CrossWalks" << msg.data.size() << endl;
+  if(m_MapRaw.pCrossWalks == nullptr)
+    m_MapRaw.pCrossWalks = new UtilityHNS::AisanCrossWalkFileReader(msg);
+}
+
+void TrajectoryGen::callbackGetVMNodes(const vector_map_msgs::NodeArray& msg)
+{
+  std::cout << "Received Nodes" << msg.data.size() << endl;
+  if(m_MapRaw.pNodes == nullptr)
+    m_MapRaw.pNodes = new UtilityHNS::AisanNodesFileReader(msg);
+}
+//eun end
+
 void TrajectoryGen::callbackGetInitPose(const geometry_msgs::PoseWithCovarianceStampedConstPtr &msg)
 {
   if(!bInitPos)
@@ -130,13 +344,6 @@ void TrajectoryGen::callbackGetInitPose(const geometry_msgs::PoseWithCovarianceS
   }
 }
 
-void TrajectoryGen::callbackGetCurrentPose(const geometry_msgs::PoseStampedConstPtr& msg)
-{
-  m_CurrentPos = PlannerHNS::WayPoint(msg->pose.position.x, msg->pose.position.y, msg->pose.position.z, tf::getYaw(msg->pose.orientation));
-  m_InitPos = m_CurrentPos;
-  bNewCurrentPos = true;
-  bInitPos = true;
-}
 
 void TrajectoryGen::callbackGetVehicleStatus(const geometry_msgs::TwistStampedConstPtr& msg)
 {
@@ -164,48 +371,38 @@ void TrajectoryGen::callbackGetRobotOdom(const nav_msgs::OdometryConstPtr& msg)
   bVehicleStatus = true;
 }
 
-void TrajectoryGen::callbackGetGlobalPlannerPath(const autoware_msgs::LaneArrayConstPtr& msg)
-{
-  if(msg->lanes.size() > 0)
-  {
-    bool bOldGlobalPath = m_GlobalPaths.size() == msg->lanes.size();
 
-    m_GlobalPaths.clear();
-
-    for(unsigned int i = 0 ; i < msg->lanes.size(); i++)
-    {
-      PlannerHNS::ROSHelpers::ConvertFromAutowareLaneToLocalLane(msg->lanes.at(i), m_temp_path);
-
-      PlannerHNS::PlanningHelpers::CalcAngleAndCost(m_temp_path);
-      m_GlobalPaths.push_back(m_temp_path);
-
-      if(bOldGlobalPath)
-      {
-        bOldGlobalPath = PlannerHNS::PlanningHelpers::CompareTrajectories(m_temp_path, m_GlobalPaths.at(i));
-      }
-    }
-
-    if(!bOldGlobalPath)
-    {
-      bWayGlobalPath = true;
-      std::cout << "Received New Global Path Generator ! " << std::endl;
-    }
-    else
-    {
-      m_GlobalPaths.clear();
-    }
-  }
-}
-
+ //eun
 void TrajectoryGen::MainLoop()
 {
   ros::Rate loop_rate(100);
 
   PlannerHNS::WayPoint prevState, state_change;
 
+
+  autoware_msgs::LaneInfo lane_info;
+
   while (ros::ok())
   {
     ros::spinOnce();
+
+    if(!bMap)
+    {
+      std::vector<UtilityHNS::AisanDataConnFileReader::DataConn> conn_data;;
+
+      if(m_MapRaw.GetVersion()==2)
+      {
+        std::cout << "Map Version 2" << endl;
+        bMap = true;
+        PlannerHNS::MappingHelpers::ConstructRoadNetworkFromROSMessageV2(m_MapRaw.pLanes->m_data_list, m_MapRaw.pPoints->m_data_list,
+            m_MapRaw.pCenterLines->m_data_list, m_MapRaw.pIntersections->m_data_list,m_MapRaw.pAreas->m_data_list,
+            m_MapRaw.pLines->m_data_list, m_MapRaw.pStopLines->m_data_list,  m_MapRaw.pSignals->m_data_list,
+            m_MapRaw.pVectors->m_data_list, m_MapRaw.pCurbs->m_data_list, m_MapRaw.pRoadedges->m_data_list, m_MapRaw.pWayAreas->m_data_list,
+            m_MapRaw.pCrossWalks->m_data_list, m_MapRaw.pNodes->m_data_list, conn_data,
+            m_MapRaw.pLanes, m_MapRaw.pPoints, m_MapRaw.pNodes, m_MapRaw.pLines, PlannerHNS::GPSPoint(), m_Map, true, true, false);
+      }
+      
+    }
 
     if(bInitPos && m_GlobalPaths.size()>0)
     {
@@ -220,27 +417,35 @@ void TrajectoryGen::MainLoop()
         m_GlobalPathSections.push_back(t_centerTrajectorySmoothed);
       }
 
+      m_Planner.FindLaneNum(m_CurrentPos, m_Map, current_lane_num, total_lane_num);
+      lane_info.current_lane = current_lane_num;
+      lane_info.total_lane = total_lane_num;
+      pub_lane_info.publish(lane_info);
       std::vector<PlannerHNS::WayPoint> sampledPoints_debug;
-      m_Planner.GenerateRunoffTrajectoryIrregular(m_GlobalPathSections, m_CurrentPos,
-                m_PlanningParams.enableLaneChange,
-                m_VehicleStatus.speed,
-                m_PlanningParams.microPlanDistance,
-                m_PlanningParams.maxSpeed,
-                m_PlanningParams.minSpeed,
-                m_PlanningParams.carTipMargin,
-                m_PlanningParams.rollInMargin,
-                m_PlanningParams.rollInSpeedFactor,
-                m_PlanningParams.pathDensity,
-                m_PlanningParams.rollOutDensity,
-                m_PlanningParams.rollOutNumber,
-                m_PlanningParams.smoothingDataWeight,
-                m_PlanningParams.smoothingSmoothWeight,
-                m_PlanningParams.smoothingToleranceError,
-                m_PlanningParams.speedProfileFactor,
-                m_PlanningParams.enableHeadingSmoothing,
-                -1 , -1,
-                m_RollOuts, sampledPoints_debug);
-
+      if(bMap) {
+        m_Planner.GenerateRunoffTrajectoryV2(m_GlobalPathSections, m_CurrentPos,
+                  true,
+                  m_VehicleStatus.speed,
+                  m_PlanningParams.microPlanDistance,
+                  m_PlanningParams.maxSpeed,
+                  m_PlanningParams.minSpeed,
+                  m_PlanningParams.carTipMargin,
+                  m_PlanningParams.rollInMargin,
+                  m_PlanningParams.rollInSpeedFactor,
+                  m_PlanningParams.pathDensity,
+                  m_PlanningParams.rollOutDensity,
+                  m_PlanningParams.rollOutNumber,
+                  m_PlanningParams.smoothingDataWeight,
+                  m_PlanningParams.smoothingSmoothWeight,
+                  m_PlanningParams.smoothingToleranceError,
+                  m_PlanningParams.speedProfileFactor,
+                  m_PlanningParams.enableHeadingSmoothing,
+                  -1 , -1,
+                  m_RollOuts, sampledPoints_debug,m_Map);
+      }
+      else
+        return;
+      
       autoware_msgs::LaneArray local_lanes;
       for(unsigned int i=0; i < m_RollOuts.size(); i++)
       {
@@ -258,71 +463,6 @@ void TrajectoryGen::MainLoop()
         }
       }
       pub_LocalTrajectories.publish(local_lanes);
-      
-      //eun
-      //std::cout<<"m_RollOuts size : "<<m_RollOuts.size()<<std::endl;
-      //std::cout<<"m_RollOuts size : "<<m_RollOuts.size()<<std::endl;
-      m_LocalPathSections.clear();
-
-      for(unsigned int i = 0; i < m_RollOuts.size(); i++)
-      {
-	for(unsigned int j = 0; j < m_RollOuts.at(i).size(); j ++)
-	{
-	  t_centerTrajectorySmoothed.clear();
-          PlannerHNS::PlanningHelpers::ExtractPartFromPointToDistanceDirectionFast(m_RollOuts.at(i).at(j), m_CurrentPos, m_PlanningParams.horizonDistance ,m_PlanningParams.pathDensity ,t_centerTrajectorySmoothed);
-          m_LocalPathSections.push_back(t_centerTrajectorySmoothed);
-	}
-        
-      }
-
-      std::vector<PlannerHNS::WayPoint> sampledPoints_debug_local;
-      m_Planner.GenerateRunoffTrajectory(m_LocalPathSections, m_CurrentPos,
-                m_PlanningParams.enableLaneChange,
-                m_VehicleStatus.speed,
-                m_PlanningParams.microPlanDistance,
-                m_PlanningParams.maxSpeed,
-                m_PlanningParams.minSpeed,
-                m_PlanningParams.carTipMargin,
-                m_PlanningParams.rollInMargin,
-                m_PlanningParams.rollInSpeedFactor,
-                m_PlanningParams.pathDensity,
-                m_PlanningParams.rollOutDensity/4,
-                4,
-                m_PlanningParams.smoothingDataWeight,
-                m_PlanningParams.smoothingSmoothWeight,
-                m_PlanningParams.smoothingToleranceError,
-                m_PlanningParams.speedProfileFactor,
-                m_PlanningParams.enableHeadingSmoothing,
-                -1 , -1,
-                m_RollOutsBorders, sampledPoints_debug);
-
-
-      autoware_msgs::LaneArray border_lanes;
-
-      int count=0;
-      for(unsigned int i=0; i < m_RollOutsBorders.size(); i++)
-      {
-        for(unsigned int j=0; j < m_RollOutsBorders.at(i).size(); j++)
-        {
-          autoware_msgs::Lane lane;
-          PlannerHNS::PlanningHelpers::PredictConstantTimeCostForTrajectory(m_RollOutsBorders.at(i).at(j), m_CurrentPos, m_PlanningParams.minSpeed, m_PlanningParams.microPlanDistance);
-          PlannerHNS::ROSHelpers::ConvertFromLocalLaneToAutowareLane(m_RollOutsBorders.at(i).at(j), lane);
-          lane.closest_object_distance = 0;
-          lane.closest_object_velocity = 0;
-          lane.cost = 0;
-          lane.is_blocked = false;
-          lane.lane_index = i;
-          border_lanes.lanes.push_back(lane);
-          count++;
-        }
-      }
-
-      //debug
-      //std::cout<<"Border size : "<<count<<std::endl;
-      pub_LocalTrajectoriesBorders.publish(border_lanes);
-
-      //eun_end
-    
     }
     else
       sub_GlobalPlannerPaths = nh.subscribe("/lane_waypoints_array",   1,    &TrajectoryGen::callbackGetGlobalPlannerPath,   this);
@@ -330,14 +470,6 @@ void TrajectoryGen::MainLoop()
     visualization_msgs::MarkerArray all_rollOuts;
     PlannerHNS::ROSHelpers::TrajectoriesToMarkers(m_RollOuts, all_rollOuts);
     pub_LocalTrajectoriesRviz.publish(all_rollOuts);
-
-    //eun
-    //m_FirstBorders.clear();
-    //m_FirstBorders.push_back(m_RollOutsBorders.at(0));
-
-    visualization_msgs::MarkerArray all_rollOutsBorders;
-    PlannerHNS::ROSHelpers::TrajectoriesToMarkers(m_RollOutsBorders, all_rollOutsBorders);
-    pub_LocalTrajectoriesBordersRviz.publish(all_rollOutsBorders);
 
     loop_rate.sleep();
   }

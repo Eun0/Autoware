@@ -30,6 +30,26 @@
 #include "op_planner/PlannerH.h"
 #include "op_planner/PlannerCommonDef.h"
 
+//eun
+#include "op_planner/MappingHelpers.h"
+#include <geometry_msgs/Vector3Stamped.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Odometry.h>
+#include <nav_msgs/OccupancyGrid.h>
+#include "vector_map_msgs/PointArray.h"
+#include "vector_map_msgs/LaneArray.h"
+#include "vector_map_msgs/NodeArray.h"
+#include "vector_map_msgs/StopLineArray.h"
+#include "vector_map_msgs/DTLaneArray.h"
+#include "vector_map_msgs/LineArray.h"
+#include "vector_map_msgs/AreaArray.h"
+#include "vector_map_msgs/SignalArray.h"
+#include "vector_map_msgs/StopLine.h"
+#include "vector_map_msgs/VectorArray.h"
+#include <autoware_msgs/LaneInfo.h>
+
+
 namespace TrajectoryGeneratorNS
 {
 
@@ -38,13 +58,45 @@ class TrajectoryGen
 protected:
 
   //eun
-  ros::Publisher pub_LocalTrajectoriesBorders;
-  ros::Publisher pub_LocalTrajectoriesBordersRviz;
-  std::vector<std::vector<PlannerHNS::WayPoint> > m_LocalPathSections;
-  std::vector<std::vector<std::vector<PlannerHNS::WayPoint> > > m_RollOutsBorders;
-  std::vector<std::vector<std::vector<PlannerHNS::WayPoint>>> m_FirstBorders;
+  bool bWayGlobalPathLogs;
+  int current_lane_num;
+  int total_lane_num;
+  ros::Publisher pub_lane_info;
+  PlannerHNS::MAP_SOURCE_TYPE m_MapType;
+  std::string m_MapPath;
+  PlannerHNS::RoadNetwork m_Map;
+  bool bMap;
+  UtilityHNS::MapRaw m_MapRaw;
+  ros::Subscriber sub_lanes;
+  ros::Subscriber sub_points;
+  ros::Subscriber sub_dt_lanes;
+  ros::Subscriber sub_intersect;
+  ros::Subscriber sup_area;
+  ros::Subscriber sub_lines;
+  ros::Subscriber sub_stop_line;
+  ros::Subscriber sub_signals;
+  ros::Subscriber sub_vectors;
+  ros::Subscriber sub_curbs;
+  ros::Subscriber sub_edges;
+  ros::Subscriber sub_way_areas;
+  ros::Subscriber sub_cross_walk;
+  ros::Subscriber sub_nodes;
+  void callbackGetVMLanes(const vector_map_msgs::LaneArray& msg);
+  void callbackGetVMPoints(const vector_map_msgs::PointArray& msg);
+  void callbackGetVMdtLanes(const vector_map_msgs::DTLaneArray& msg);
+  void callbackGetVMIntersections(const vector_map_msgs::CrossRoadArray& msg);
+  void callbackGetVMAreas(const vector_map_msgs::AreaArray& msg);
+  void callbackGetVMLines(const vector_map_msgs::LineArray& msg);
+  void callbackGetVMStopLines(const vector_map_msgs::StopLineArray& msg);
+  void callbackGetVMSignal(const vector_map_msgs::SignalArray& msg);
+  void callbackGetVMVectors(const vector_map_msgs::VectorArray& msg);
+  void callbackGetVMCurbs(const vector_map_msgs::CurbArray& msg);
+  void callbackGetVMRoadEdges(const vector_map_msgs::RoadEdgeArray& msg);
+  void callbackGetVMWayAreas(const vector_map_msgs::WayAreaArray& msg);
+  void callbackGetVMCrossWalks(const vector_map_msgs::CrossWalkArray& msg);
+  void callbackGetVMNodes(const vector_map_msgs::NodeArray& msg);
 
-  
+  //eun end
 
   PlannerHNS::PlannerH m_Planner;
   geometry_msgs::Pose m_OriginPos;
@@ -69,7 +121,7 @@ protected:
     PlannerHNS::CAR_BASIC_INFO m_CarInfo;
 
 
-  //ROS messages (topics)
+    //ROS messages (topics)
   ros::NodeHandle nh;
 
   //define publishers
