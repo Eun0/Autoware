@@ -118,6 +118,9 @@ void TrajectoryGen::UpdatePlanningParams(ros::NodeHandle& _nh)
   else
     m_PlanningParams.rollOutNumber = 0;
 
+  //eun
+  _nh.getParam("/op_common_params/bordersNumber",m_PlanningParams.borderNumber);
+
   _nh.getParam("/op_common_params/horizonDistance", m_PlanningParams.horizonDistance);
   _nh.getParam("/op_common_params/minFollowingDistance", m_PlanningParams.minFollowingDistance);
   _nh.getParam("/op_common_params/minDistanceToAvoid", m_PlanningParams.minDistanceToAvoid);
@@ -434,7 +437,7 @@ void TrajectoryGen::MainLoop()
                   m_PlanningParams.rollInSpeedFactor,
                   m_PlanningParams.pathDensity,
                   m_PlanningParams.rollOutDensity,
-                  m_PlanningParams.rollOutNumber,
+                  m_PlanningParams.borderNumber,
                   m_PlanningParams.smoothingDataWeight,
                   m_PlanningParams.smoothingSmoothWeight,
                   m_PlanningParams.smoothingToleranceError,
