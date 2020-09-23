@@ -896,6 +896,8 @@ public:
   double   pathDensity;
   double   rollOutDensity;
   int   rollOutNumber;
+  //eun
+  int borderNumber;
   double   horizonDistance;
   double   minFollowingDistance; //should be bigger than Distance to follow
   double   minDistanceToAvoid; // should be smaller than minFollowingDistance and larger than maxDistanceToAvoid
@@ -937,6 +939,8 @@ public:
     pathDensity            = 0.25;
     rollOutDensity          = 0.5;
     rollOutNumber          = 4;
+    //eun
+    borderNumber           = 9;    
     horizonDistance          = 120;
     minFollowingDistance      = 35;
     minDistanceToAvoid        = 15;
